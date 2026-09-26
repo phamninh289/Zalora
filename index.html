@@ -2098,10 +2098,19 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
     }
 
     function detectViolation(text) {
-      // Người dùng được phép kể lại trải nghiệm bị bạo lực/bắt nạt.
-      // Chỉ các câu có dấu hiệu đe dọa hoặc chủ động gây hại mới bị chặn.
-      // Một số từ có nghĩa bình thường theo ngữ cảnh (ví dụ "móc đồ",
-      // "chim sẻ", "chim bồ câu") không được coi là nội dung nhạy cảm.
+      /*
+       * Bài tâm sự về việc mình BỊ bạo lực/bắt nạt/quấy rối,
+       * bạo lực gia đình, hoặc đang có ý nghĩ tự tử/tự làm hại
+       * là nội dung cần hỗ trợ, KHÔNG phải nội dung vi phạm.
+       *
+       * Vì vậy detectViolation phải bỏ qua các bài đã được nhận diện
+       * là nhu cầu hỗ trợ. publishPost() vẫn đăng bài và mở luồng Tư vấn.
+       */
+      if (detectAdvisorSupportNeed(text)) {
+        return "";
+      }
+
+      // Một số từ có nghĩa bình thường theo ngữ cảnh không được coi là vi phạm.
       const cleanForContext = normalizeText(text);
       const benignContext =
         /\bmoc do\b|\bmoc khoa\b|\bchim se\b|\bchim bo cau\b|\bchim canh cut\b|\bchim ung\b/.test(cleanForContext);
