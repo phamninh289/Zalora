@@ -2178,24 +2178,35 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
     function suspiciousUrlReason(rawUrl) {
       let url;
       try {
-        url = new URL(/^https?:\/\//i.test(rawUrl) ? rawUrl : `https://${rawUrl}`);
+        url = new URL(/^https?:\/\//i.test(rawUrl) ? rawUrl : "https://" + rawUrl);
       } catch {
         return "đường link không hợp lệ";
       }
 
       const host = url.hostname.toLowerCase();
-      const urlText = normalizeText(`${host} ${url.pathname} ${url.search}`);
+      const urlText = normalizeText(host + " " + url.pathname + " " + url.search);
+      const compactUrlText = urlText.replace(/[^a-z0-9]+/g, "");
 
       // Chỉ kiểm tra URL/path/query, không kiểm tra caption.
-      // Từ khóa đơn phải là token độc lập trong URL để tránh:
-      // website -> bet, abcsexample -> sex, ...
+      // Các cụm cá độ thường bị viết liền trong tên miền, ví dụ:
+      // cadobongda99.com -> cado / cadobongda.
+      const compactSuspiciousKeywords = [
+        "cado", "cadobongda", "keobong", "keonhacai",
+        "nhacai", "soikeo", "batkeo", "taixiu",
+        "casino", "casinoonline", "nohu", "betting",
+        "w88", "188bet", "fb88", "789bet", "jun88",
+        "porn", "p0rn", "nude", "nsfw", "xxx"
+      ];
+
+      if (compactSuspiciousKeywords.some(keyword => compactUrlText.includes(keyword))) {
+        return "đường link chứa từ khóa cá độ hoặc nội dung người lớn";
+      }
+
       if (suspiciousLinkKeywords.some(k => {
         const keyword = normalizeText(k);
         if (!keyword) return false;
         const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        const pattern = keyword.includes(" ")
-          ? `(^|[\\s/_.?=&-])${escaped}(?=$|[\\s/_.?=&-])`
-          : `(^|[\\s/_.?=&-])${escaped}(?=$|[\\s/_.?=&-])`;
+        const pattern = "(^|[\\s/_.?=&-])" + escaped + "(?=$|[\\s/_.?=&-])";
         return new RegExp(pattern).test(urlText);
       })) {
         return "đường link chứa từ khóa cá độ hoặc nội dung người lớn";
