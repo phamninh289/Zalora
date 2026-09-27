@@ -2377,11 +2377,122 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
               }
             }
 
-            // Chỉ coi là tín hiệu khi vùng đỏ chiếm tỷ lệ lớn,
-            // tránh chặn áo/quần/hoa hoặc một vật màu đỏ nhỏ.
             resolve(redPixels / (size * size) >= 0.18);
           } catch (error) {
             console.warn("Không thể kiểm tra pixel:", error);
+            resolve(false);
+          }
+        };
+
+        image.onerror = () => resolve(false);
+        image.src = dataUrl;
+      });
+    }
+
+    // Kiểm tra hình minh họa nhạy cảm theo đặc điểm hình ảnh cơ bản.
+    // Đây là lớp bổ sung cho model, dùng để bắt cả tranh/cartoon.
+    function hasIllustratedSensitiveShape(dataUrl) {
+      return new Promise(resolve => {
+        const image = new Image();
+
+        image.onload = () => {
+          try {
+            const canvas = document.createElement("canvas");
+            const ctx = canvas.getContext("2d", { willReadFrequently: true });
+            const size = 180;
+
+            canvas.width = size;
+            canvas.height = size;
+            ctx.drawImage(image, 0, 0, size, size);
+
+            const pixels = ctx.getImageData(0, 0, size, size).data;
+            const skin = new Uint8Array(size * size);
+
+            let skinPixels = 0;
+
+            // Nhận diện các tông da phổ biến cả ở ảnh thật và minh họa.
+            for (let y = 0; y < size; y++) {
+              for (let x = 0; x < size; x++) {
+                const i = (y * size + x) * 4;
+                const r = pixels[i];
+                const g = pixels[i + 1];
+                const b = pixels[i + 2];
+
+                const isSkin =
+                  r >= 120 &&
+                  g >= 55 &&
+                  b >= 35 &&
+                  r > g * 1.08 &&
+                  g > b * 1.05 &&
+                  r - b >= 35;
+
+                if (isSkin) {
+                  skin[y * size + x] = 1;
+                  skinPixels++;
+                }
+              }
+            }
+
+            const skinRatio = skinPixels / (size * size);
+
+            // Quét các vùng da dài/dọc và hai vùng tròn liền kề.
+            // Chỉ kích hoạt khi các tín hiệu cùng xuất hiện để giảm
+            // khả năng chặn nhầm ảnh người, đồ ăn hoặc phong cảnh.
+            let verticalSkin = 0;
+            let pairedRoundSkin = false;
+
+            for (let x = 0; x < size; x++) {
+              let run = 0;
+              let longest = 0;
+
+              for (let y = 0; y < size; y++) {
+                if (skin[y * size + x]) {
+                  run++;
+                  longest = Math.max(longest, run);
+                } else {
+                  run = 0;
+                }
+              }
+
+              if (longest >= size * 0.30) {
+                verticalSkin++;
+              }
+            }
+
+            for (let y = 20; y < size - 20 && !pairedRoundSkin; y++) {
+              for (let x = 20; x < size - 20 && !pairedRoundSkin; x++) {
+                if (!skin[y * size + x]) continue;
+
+                let left = 0;
+                let right = 0;
+                let top = 0;
+                let bottom = 0;
+
+                for (let dx = 0; dx < 20; dx++) {
+                  if (skin[y * size + (x - dx)]) left++;
+                  if (skin[y * size + (x + dx)]) right++;
+                }
+
+                for (let dy = 0; dy < 20; dy++) {
+                  if (skin[(y - dy) * size + x]) top++;
+                  if (skin[(y + dy) * size + x]) bottom++;
+                }
+
+                if (left >= 12 && right >= 12 && top >= 5 && bottom >= 5) {
+                  pairedRoundSkin = true;
+                }
+              }
+            }
+
+            // Một vùng da lớn/dọc hoặc hình minh họa có cấu trúc đặc trưng
+            // được coi là tín hiệu cần chặn ở bước tải ảnh bài viết.
+            const suspiciousShape =
+              (skinRatio >= 0.12 && verticalSkin >= 8) ||
+              (skinRatio >= 0.16 && pairedRoundSkin);
+
+            resolve(suspiciousShape);
+          } catch (error) {
+            console.warn("Không thể kiểm tra hình minh họa:", error);
             resolve(false);
           }
         };
@@ -2399,11 +2510,18 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
     }
 
     async function inspectImageWithAI(dataUrl) {
-      // Luật máu đơn giản chạy độc lập với model.
+      // Các luật hình ảnh cơ bản chạy trước model để bắt cả ảnh minh họa.
       if (await hasLargeRedRegion(dataUrl)) {
         return {
           blocked: true,
           reason: "phát hiện vùng đỏ đậm lan rộng, có thể là máu"
+        };
+      }
+
+      if (await hasIllustratedSensitiveShape(dataUrl)) {
+        return {
+          blocked: true,
+          reason: "phát hiện hình minh họa có cấu trúc nhạy cảm"
         };
       }
 
