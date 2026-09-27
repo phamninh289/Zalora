@@ -2532,41 +2532,48 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
         return;
       }
 
-      readImage(file, async dataUrl => {
-        showToast("🔍 Đang kiểm tra hình ảnh...");
+      // Chờ TOÀN BỘ quá trình đọc + AI scan hoàn tất.
+      // Nhờ vậy nút Đăng bài không thể chạy trước khi có kết quả.
+      return new Promise(resolve => {
+        readImage(file, async dataUrl => {
+          showToast("🔍 Đang kiểm tra hình ảnh bằng AI...");
 
-        const result = await scanSensitiveImage(file, dataUrl);
+          const result = await scanSensitiveImage(file, dataUrl);
 
-        if (result.blocked) {
-          addViolation(
-            "me",
-            "hình ảnh có nội dung nhạy cảm hoặc máu me"
-          );
+          if (result.blocked) {
+            addViolation(
+              "me",
+              "hình ảnh có nội dung nhạy cảm hoặc không an toàn"
+            );
 
-          addActivity(
-            `🚫 Ảnh bài viết bị chặn: ${result.reason}.`
-          );
+            addActivity(
+              `🚫 Ảnh bài viết bị chặn: ${result.reason}.`
+            );
 
-          addNotification(
-            "Ảnh không được tải lên vì có thể chứa nội dung nhạy cảm."
-          );
+            addNotification(
+              `Ảnh không được tải lên: ${result.reason}.`
+            );
 
-          state.postImage = "";
-          $("postImagePreview").innerHTML = "";
+            state.postImage = "";
+            $("postImagePreview").innerHTML = "";
 
-          showToast(
-            "🚫 Không thể tải ảnh này lên."
-          );
+            showToast(
+              "🚫 Ảnh đã bị chặn trước khi đăng."
+            );
 
-          return;
-        }
+            resolve(false);
+            return;
+          }
 
-        state.postImage = dataUrl;
+          state.postImage = dataUrl;
 
-        $("postImagePreview").innerHTML =
-          `<img class="feed-image" src="${dataUrl}" alt="Ảnh xem trước">`;
+          $("postImagePreview").innerHTML =
+            `<img class="feed-image" src="${dataUrl}" alt="Ảnh đã qua kiểm tra">`;
 
-        showToast("✅ Ảnh đã được kiểm tra.");
+          showToast("✅ Ảnh đã qua kiểm tra AI và có thể đăng.");
+
+          resolve(true);
+        });
       });
     }
 
