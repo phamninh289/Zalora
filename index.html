@@ -1231,6 +1231,9 @@
     </div>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/nsfwjs@2.4.2/dist/nsfwjs.min.js"></script>
+
   <script>
     "use strict";
 
@@ -2317,6 +2320,87 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
       });
     }
 
+    // AI image moderation: ảnh phải được phân loại trước khi được phép đăng/gửi.
+    let imageModerationModel = null;
+    let imageModerationError = null;
+
+    const imageModerationReady = (async () => {
+      try {
+        if (!window.tf || !window.nsfwjs) {
+          throw new Error("Không tải được thư viện AI image moderation.");
+        }
+
+        tf.enableProdMode();
+        await tf.ready();
+        imageModerationModel = await nsfwjs.load();
+        return true;
+      } catch (error) {
+        console.error("AI image moderation load error:", error);
+        imageModerationError = error;
+        return false;
+      }
+    })();
+
+    function getPredictionProbability(predictions, className) {
+      const item = predictions.find(prediction => prediction.className === className);
+      return item ? Number(item.probability || 0) : 0;
+    }
+
+    async function inspectImageWithAI(dataUrl) {
+      const ready = await imageModerationReady;
+
+      // Fail closed: nếu AI chưa sẵn sàng thì không cho ảnh đi tiếp.
+      if (!ready || !imageModerationModel) {
+        return {
+          blocked: true,
+          reason: "bộ quét AI hình ảnh chưa sẵn sàng"
+        };
+      }
+
+      return new Promise(resolve => {
+        const image = new Image();
+
+        image.onload = async () => {
+          try {
+            const predictions = await imageModerationModel.classify(image, 5);
+
+            const porn = getPredictionProbability(predictions, "Porn");
+            const sexy = getPredictionProbability(predictions, "Sexy");
+            const hentai = getPredictionProbability(predictions, "Hentai");
+
+            if (porn >= 0.55 || sexy >= 0.60 || hentai >= 0.60) {
+              resolve({
+                blocked: true,
+                reason: "AI phát hiện ảnh có dấu hiệu nội dung nhạy cảm/khỏa thân"
+              });
+              return;
+            }
+
+            resolve({
+              blocked: false,
+              reason: "",
+              predictions
+            });
+          } catch (error) {
+            console.error("AI image classification error:", error);
+            resolve({
+              blocked: true,
+              reason: "không thể hoàn tất kiểm tra AI hình ảnh"
+            });
+          }
+        };
+
+        image.onerror = () => {
+          resolve({
+            blocked: true,
+            reason: "không thể đọc hình ảnh để kiểm tra"
+          });
+        };
+
+        image.src = dataUrl;
+      });
+    }
+
     function inspectImagePixels(dataUrl) {
       return new Promise(resolve => {
         const image = new Image();
@@ -2353,10 +2437,6 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
 
             totalPixels++;
 
-            /*
-             * Heuristic demo phát hiện ảnh có quá nhiều vùng đỏ.
-             * Đây không phải AI nhận diện ảnh thật.
-             */
             if (
               red > 120 &&
               red > green * 1.35 &&
@@ -2380,13 +2460,43 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
 
         image.onerror = () => {
           resolve({
-            blocked: false,
-            reason: ""
+            blocked: true,
+            reason: "không thể đọc hình ảnh để kiểm tra"
           });
         };
 
         image.src = dataUrl;
       });
+    }
+
+    async function scanSensitiveImage(file, dataUrl) {
+      if (!file || !file.type.startsWith("image/")) {
+        return {
+          blocked: true,
+          reason: "tệp tải lên không phải hình ảnh"
+        };
+      }
+
+      // Tên file chỉ là lớp phụ, không phải kết quả quét ảnh.
+      if (hasSensitiveImageName(file)) {
+        return {
+          blocked: true,
+          reason: "tên ảnh có chứa từ khóa nhạy cảm"
+        };
+      }
+
+      // BẮT BUỘC quét nội dung hình ảnh trước khi cho phép sử dụng ảnh.
+      const aiResult = await inspectImageWithAI(dataUrl);
+      if (aiResult.blocked) return aiResult;
+
+      // Giữ lớp heuristic cũ như lớp bổ sung cho dấu hiệu máu/bạo lực.
+      const pixelResult = await inspectImagePixels(dataUrl);
+      if (pixelResult.blocked) return pixelResult;
+
+      return {
+        blocked: false,
+        reason: ""
+      };
     }
 
     async function scanSensitiveImage(file, dataUrl) {
@@ -2986,6 +3096,18 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
     }
 
     function publishPost() {
+      if (postImageScanPromise) {
+        showToast("🔍 Ảnh vẫn đang được kiểm tra. Vui lòng chờ kết quả quét.");
+        return;
+      }
+
+      if (state.postImage && imageModerationError) {
+        state.postImage = "";
+        $("postImagePreview").innerHTML = "";
+        showToast("🚫 Bộ quét ảnh chưa sẵn sàng nên không thể đăng ảnh.");
+        return;
+      }
+
       const text = $("postInput").value.trim();
       const image = state.postImage;
       const video = state.postVideo;
@@ -3688,10 +3810,15 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
       };
     });
 
+    let postImageScanPromise = null;
+
     $("postButton").onclick = publishPost;
 
     $("postImageInput").onchange = event => {
-      handlePostImage(event.target.files[0]);
+      const file = event.target.files[0];
+      postImageScanPromise = handlePostImage(file).finally(() => {
+        postImageScanPromise = null;
+      });
       event.target.value = "";
     };
 
