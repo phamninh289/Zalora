@@ -2315,14 +2315,6 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
       $("blockAccountOverlay").dataset.botKey = "";
     }
 
-    function hasSensitiveImageName(file) {
-      const filename = normalizeText(file.name);
-
-      return sensitiveImageWords.some(word => {
-        return filename.includes(normalizeText(word));
-      });
-    }
-
     // AI image moderation: ảnh phải được phân loại trước khi được phép đăng/gửi.
     let imageModerationModel = null;
     let imageModerationError = null;
