@@ -2118,8 +2118,11 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
       const benignContext =
         /\bmoc do\b|\bmoc khoa\b|\bchim se\b|\bchim bo cau\b|\bchim canh cut\b|\bchim ung\b/.test(cleanForContext);
 
-      if (hasBlacklistMatch(text, blacklist.harassment) ||
-          (!benignContext && hasObfuscatedBlacklistMatch(text))) {
+      // Không chạy toàn bộ blacklist qua bộ dò obfuscation ở đây.
+      // Lớp chuẩn hóa + hasBlacklistMatch đã xử lý teencode/ký tự lách chữ,
+      // còn hasObfuscatedBlacklistMatch trên toàn bộ blacklist dễ gây chặn oan
+      // với các từ ngắn như "cu", "cac", "hs", "bj" trong câu bình thường.
+      if (hasBlacklistMatch(text, blacklist.harassment)) {
         return "quấy rối hoặc nội dung nhạy cảm";
       }
 
