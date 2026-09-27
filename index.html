@@ -2341,13 +2341,74 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
       return item ? Number(item.probability || 0) : 0;
     }
 
+    // Chỉ giữ 2 kiểu nhận diện trực tiếp trên ảnh:
+    // 1) vùng đỏ đậm lan rộng -> tín hiệu hình ảnh có máu;
+    // 2) AI chỉ dùng 3 nhãn liên quan nội dung nhạy cảm: Porn / Hentai / Sexy.
+    // Không đọc tên file, không dò từ trong tên file, không nhận diện khuôn mặt.
+    function hasLargeRedRegion(dataUrl) {
+      return new Promise(resolve => {
+        const image = new Image();
+
+        image.onload = () => {
+          try {
+            const canvas = document.createElement("canvas");
+            const ctx = canvas.getContext("2d", { willReadFrequently: true });
+
+            const size = 180;
+            canvas.width = size;
+            canvas.height = size;
+            ctx.drawImage(image, 0, 0, size, size);
+
+            const pixels = ctx.getImageData(0, 0, size, size).data;
+            let redPixels = 0;
+
+            for (let i = 0; i < pixels.length; i += 4) {
+              const r = pixels[i];
+              const g = pixels[i + 1];
+              const b = pixels[i + 2];
+
+              // Chỉ tính vùng đỏ đậm, bão hòa cao.
+              if (
+                r >= 105 &&
+                r > g * 1.35 &&
+                r > b * 1.35 &&
+                (r - g) >= 35
+              ) {
+                redPixels++;
+              }
+            }
+
+            // Cần vùng đỏ chiếm đủ lớn trong ảnh mới coi là tín hiệu.
+            resolve(redPixels / (size * size) >= 0.18);
+          } catch (error) {
+            console.warn("Không thể kiểm tra vùng đỏ:", error);
+            resolve(false);
+          }
+        };
+
+        image.onerror = () => resolve(false);
+        image.src = dataUrl;
+      });
+    }
+
     async function inspectImageWithAI(dataUrl) {
+      // Ảnh bình thường không bị chặn chỉ vì model AI không tải được.
+      // Đây là demo client-side nên nếu AI không sẵn sàng, vẫn cho đăng.
+      const redRegion = await hasLargeRedRegion(dataUrl);
+
+      if (redRegion) {
+        return {
+          blocked: true,
+          reason: "phát hiện vùng màu đỏ đậm lan rộng trong hình ảnh"
+        };
+      }
+
       const ready = await imageModerationReady;
 
       if (!ready || !imageModerationModel) {
         return {
-          blocked: true,
-          reason: "bộ quét AI hình ảnh chưa sẵn sàng"
+          blocked: false,
+          reason: ""
         };
       }
 
@@ -2362,33 +2423,36 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
             const hentai = getPredictionProbability(predictions, "Hentai");
             const sexy = getPredictionProbability(predictions, "Sexy");
 
-            // Chỉ chặn khi AI có tín hiệu rất rõ về nội dung tình dục.
-            // Không dùng màu ảnh, tên file hoặc khuôn mặt để quyết định.
-            const sexualContent =
+            // Chỉ chặn tín hiệu rất rõ của nội dung nude/tình dục.
+            // Không dùng Sexy ở ngưỡng thấp để tránh chặn selfie, du lịch,
+            // đồ bơi hoặc ảnh đời thường.
+            const sensitiveContent =
               porn >= 0.80 ||
               hentai >= 0.80 ||
-              (sexy >= 0.92 && porn >= 0.05);
+              sexy >= 0.98;
 
             resolve({
-              blocked: sexualContent,
-              reason: sexualContent
-                ? "AI phát hiện ảnh có nội dung tình dục/khỏa thân"
+              blocked: sensitiveContent,
+              reason: sensitiveContent
+                ? "phát hiện hình ảnh nude/nội dung tình dục"
                 : "",
               predictions
             });
           } catch (error) {
             console.error("AI image classification error:", error);
+
+            // Lỗi AI không làm ảnh bình thường bị chặn.
             resolve({
-              blocked: true,
-              reason: "không thể hoàn tất kiểm tra AI hình ảnh"
+              blocked: false,
+              reason: ""
             });
           }
         };
 
         image.onerror = () => {
           resolve({
-            blocked: true,
-            reason: "không thể đọc hình ảnh để kiểm tra"
+            blocked: false,
+            reason: ""
           });
         };
 
@@ -2404,7 +2468,6 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
         };
       }
 
-      // Quyết định hoàn toàn dựa trên nội dung hình ảnh được AI phân loại.
       return await inspectImageWithAI(dataUrl);
     }
 
