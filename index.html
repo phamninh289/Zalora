@@ -2436,7 +2436,7 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
       // Nhờ vậy nút Đăng bài không thể chạy trước khi có kết quả.
       return new Promise(resolve => {
         readImage(file, async dataUrl => {
-          showToast("🔍 Đang kiểm tra hình ảnh bằng AI...");
+          showToast("🔍 Đang xử lý hình ảnh...");
 
           const result = await scanSensitiveImage(file, dataUrl);
 
@@ -2470,7 +2470,7 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
           $("postImagePreview").innerHTML =
             `<img class="feed-image" src="${dataUrl}" alt="Ảnh đã qua kiểm tra">`;
 
-          showToast("✅ Ảnh đã qua kiểm tra AI và có thể đăng.");
+          showToast("✅ Ảnh đã được xử lý và có thể đăng.");
 
           resolve(true);
         });
@@ -3005,13 +3005,6 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
     function publishPost() {
       if (postImageScanPromise) {
         showToast("🔍 Ảnh vẫn đang được kiểm tra. Vui lòng chờ kết quả quét.");
-        return;
-      }
-
-      if (state.postImage && imageModerationError) {
-        state.postImage = "";
-        $("postImagePreview").innerHTML = "";
-        showToast("🚫 Bộ quét ảnh chưa sẵn sàng nên không thể đăng ảnh.");
         return;
       }
 
