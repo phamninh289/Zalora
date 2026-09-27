@@ -2368,7 +2368,13 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
             const sexy = getPredictionProbability(predictions, "Sexy");
             const hentai = getPredictionProbability(predictions, "Hentai");
 
-            if (porn >= 0.55 || sexy >= 0.60 || hentai >= 0.60) {
+            // "Sexy" của NSFWJS có thể đánh điểm cao với ảnh chân dung,
+            // nên không dùng ngưỡng thấp để chặn mặt người bình thường.
+            // Chỉ chặn "Sexy" khi điểm rất cao và có thêm tín hiệu NSFW.
+            const strongSexySignal =
+              sexy >= 0.88 && (porn >= 0.12 || hentai >= 0.12);
+
+            if (porn >= 0.55 || hentai >= 0.60 || strongSexySignal) {
               resolve({
                 blocked: true,
                 reason: "AI phát hiện ảnh có dấu hiệu nội dung nhạy cảm/khỏa thân"
