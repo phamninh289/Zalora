@@ -2499,17 +2499,6 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
       };
     }
 
-    async function scanSensitiveImage(file, dataUrl) {
-      if (hasSensitiveImageName(file)) {
-        return {
-          blocked: true,
-          reason: "tên ảnh có chứa từ khóa nhạy cảm"
-        };
-      }
-
-      return inspectImagePixels(dataUrl);
-    }
-
     function readImage(file, callback) {
       const reader = new FileReader();
 
