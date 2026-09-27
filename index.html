@@ -2319,41 +2319,31 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
     let imageModerationModel = null;
     let imageModerationError = null;
 
+    // Bộ xử lý ảnh của bài viết:
+    // - Không dùng tên file.
+    // - Không nhận diện khuôn mặt.
+    // - Kiểm tra nội dung ảnh trực tiếp bằng mô hình NSFWJS.
+    // - Đồng thời kiểm tra vùng đỏ đậm lan rộng như một tín hiệu máu.
     const imageModerationReady = (async () => {
       try {
         if (!window.tf || !window.nsfwjs) {
-          throw new Error("Không tải được thư viện AI image moderation.");
+          throw new Error("Không tải được thư viện nhận diện ảnh.");
         }
 
         tf.enableProdMode();
         await tf.ready();
-        imageModerationModel = await nsfwjs.load("https://cdn.jsdelivr.net/gh/infinitered/nsfwjs@master/models/mobilenet_v2/");
+
+        imageModerationModel = await nsfwjs.load(
+          "https://cdn.jsdelivr.net/gh/infinitered/nsfwjs@master/models/mobilenet_v2/"
+        );
+
         return true;
       } catch (error) {
-        console.error("AI image moderation load error:", error);
+        console.error("Image moderation model error:", error);
         imageModerationError = error;
         return false;
       }
     })();
-
-    // Image moderation tối giản: không dùng AI/NSFWJS.
-    // Ảnh bình thường được phép đăng. Chỉ áp dụng luật pixel đơn giản
-    // cho vùng đỏ đậm lan rộng; không đọc tên file và không nhận diện khuôn mặt.
-    async function inspectImageWithAI(dataUrl) {
-      const redRegion = await hasLargeRedRegion(dataUrl);
-
-      if (redRegion) {
-        return {
-          blocked: true,
-          reason: "phát hiện vùng màu đỏ đậm lan rộng trong hình ảnh"
-        };
-      }
-
-      return {
-        blocked: false,
-        reason: ""
-      };
-    }
 
     function hasLargeRedRegion(dataUrl) {
       return new Promise(resolve => {
@@ -2381,12 +2371,14 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
                 r >= 105 &&
                 r > g * 1.35 &&
                 r > b * 1.35 &&
-                (r - g) >= 35
+                r - g >= 35
               ) {
                 redPixels++;
               }
             }
 
+            // Chỉ coi là tín hiệu khi vùng đỏ chiếm tỷ lệ lớn,
+            // tránh chặn áo/quần/hoa hoặc một vật màu đỏ nhỏ.
             resolve(redPixels / (size * size) >= 0.18);
           } catch (error) {
             console.warn("Không thể kiểm tra pixel:", error);
@@ -2395,6 +2387,80 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
         };
 
         image.onerror = () => resolve(false);
+        image.src = dataUrl;
+      });
+    }
+
+    function getPredictionProbability(predictions, className) {
+      const item = predictions.find(
+        prediction => prediction.className === className
+      );
+      return item ? Number(item.probability || 0) : 0;
+    }
+
+    async function inspectImageWithAI(dataUrl) {
+      // Luật máu đơn giản chạy độc lập với model.
+      if (await hasLargeRedRegion(dataUrl)) {
+        return {
+          blocked: true,
+          reason: "phát hiện vùng màu đỏ đậm lan rộng, có thể là máu"
+        };
+      }
+
+      const ready = await imageModerationReady;
+
+      // Nếu model CDN lỗi, không chặn toàn bộ ảnh bình thường.
+      // Khi đó chỉ còn luật pixel ở trên.
+      if (!ready || !imageModerationModel) {
+        return {
+          blocked: false,
+          reason: ""
+        };
+      }
+
+      return new Promise(resolve => {
+        const image = new Image();
+
+        image.onload = async () => {
+          try {
+            const predictions = await imageModerationModel.classify(image, 5);
+
+            const porn = getPredictionProbability(predictions, "Porn");
+            const hentai = getPredictionProbability(predictions, "Hentai");
+            const sexy = getPredictionProbability(predictions, "Sexy");
+
+            // Porn/Hentai là tín hiệu chính cho nude/bộ phận sinh dục.
+            // Sexy chỉ chặn ở ngưỡng rất cao để không chặn selfie,
+            // du lịch, thời trang hoặc ảnh đời thường.
+            const sensitiveContent =
+              porn >= 0.80 ||
+              hentai >= 0.80 ||
+              sexy >= 0.98;
+
+            resolve({
+              blocked: sensitiveContent,
+              reason: sensitiveContent
+                ? "phát hiện ảnh nude hoặc nội dung liên quan bộ phận sinh dục"
+                : "",
+              predictions
+            });
+          } catch (error) {
+            console.error("Image classification error:", error);
+
+            resolve({
+              blocked: false,
+              reason: ""
+            });
+          }
+        };
+
+        image.onerror = () => {
+          resolve({
+            blocked: false,
+            reason: ""
+          });
+        };
+
         image.src = dataUrl;
       });
     }
