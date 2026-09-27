@@ -1335,16 +1335,17 @@
       // còn xử lý teencode, chèn ký tự và kéo dài chữ để né bộ lọc.
       profanity: [
                 "chó đẻ", "con chó", "cmm", "con mẹ mày", "dâm", "đĩ",
-                "dm", "dmm", "dkm", "dcm", "dcmm", "dcmnl", "dmnl",
-                "dit me", "ditme", "du ma", "du me", "duma", "dume", "dume",
-                "dit", "ditme", "con cac", "cac", "cc", "cl", "deo", "deu",
-                "dech", "me kiep", "mek", "rac ruoi", "si nhuc", "xuc pham",
-                "ngu", "do ngu", "cai lon", "lon", "buoi", "cak", "cek", "kec",
-                "mat day", "vo hoc", "khon nan", "cho chet", "thang cho",
-                "do khon", "thang dien", "con dien", "oc cho", "oc c",
-                "xam lon", "xam l", "vai lon", "vai l", "vl", "vcl", "vc",
-                "sml", "cho ma", "lao cho", "cac", "lon", "buoi", "cu",
-                "dung cu"
+        "clm", "đmm", "cai lon ma may", "ditmemaythangngu",
+"dm", "dmm", "dkm", "dcm", "dcmm", "dcmnl", "dmnl",
+        "dit me", "ditme", "du ma", "du me", "duma", "dume", "dume",
+        "dit", "ditme", "con cac", "cac", "cc", "cl", "deo", "deu",
+        "dech", "me kiep", "mek", "rac ruoi", "si nhuc", "xuc pham",
+        "ngu", "do ngu", "cai lon", "lon", "buoi", "cak", "cek", "kec",
+        "mat day", "vo hoc", "khon nan", "cho chet", "thang cho",
+        "do khon", "thang dien", "con dien", "oc cho", "oc c",
+        "xam lon", "xam l", "vai lon", "vai l", "vl", "vcl", "vc",
+        "sml", "cho ma", "lao cho", "cac", "lon", "buoi", "cu",
+        "dung cu"
       ],
 
       // Không chặn các từ mô tả trải nghiệm như "bạo lực", "bắt nạt",
@@ -1659,30 +1660,44 @@
 
     function hasObfuscatedBlacklistMatch(text) {
       const normalized = normalizeBlacklistText(text);
+      const collapsed = collapseBlacklistText(text);
+      const paddedNormalized = " " + normalized + " ";
       const allWords = Object.values(blacklist).flat();
       const rawTokens = getModerationTokens(text);
       const normalizedTokens = normalized.split(/\s+/).filter(Boolean);
 
       return allWords.some(word => {
         const w = normalizeBlacklistText(word);
+        const cw = collapseBlacklistText(word);
+
         if (!w || isModerationSafeContext(text, word)) return false;
 
-        // Cụm từ: yêu cầu xuất hiện như một cụm, không nằm giữa một từ khác.
+        // Cụm có khoảng trắng: bắt đúng cụm sau khi chuẩn hóa.
         if (w.includes(" ")) {
-          const escaped = w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-          return new RegExp(`(^|\\s)${escaped}(?=\\s|$)`).test(normalized);
+          if (paddedNormalized.includes(" " + w + " ")) return true;
+
+          // Bắt kiểu cố tình dính toàn bộ cụm:
+          // "cai lon ma may" -> "cailonmamay"
+          if (cw.length >= 4 && collapsed.includes(cw)) return true;
+
+          return false;
         }
 
-        // Từ đơn: KHÔNG dùng includes().
-        const matches = normalizedTokens
-          .map((token, index) => ({token, index}))
-          .filter(item => item.token === w);
+        // Từ đơn: ưu tiên token độc lập để tránh false positive.
+        for (let i = 0; i < normalizedTokens.length; i++) {
+          if (normalizedTokens[i] !== w) continue;
 
-        for (const match of matches) {
-          const rawToken = rawTokens[match.index] || "";
+          const rawToken = rawTokens[i] || "";
           if (isAccentCollision(rawToken, w)) continue;
+
           return true;
         }
+
+        // Bắt kiểu nối nhiều từ để né bộ lọc:
+        // "ditmemaythangngu", "concho", "chode"...
+        // Chỉ áp dụng từ 4 ký tự trở lên; các từ rất ngắn
+        // vẫn phải xuất hiện như token độc lập.
+        if (cw.length >= 4 && collapsed.includes(cw)) return true;
 
         return false;
       });
@@ -3198,3 +3213,595 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
 
         const bubble = document.createElement("div");
         bubble.className = "bubble";
+
+        if (message.deleted) {
+          article.classList.add("retracted");
+          bubble.innerHTML =
+            "⚠️ Hệ thống đã thu hồi tin nhắn do vi phạm tiêu chuẩn cộng đồng." +
+            `<br><small>Lý do: ${message.reason || "vi phạm"}.</small>`;
+        } else if (message.image) {
+          const image = document.createElement("img");
+          image.className = "message-image";
+          image.src = message.image;
+          image.alt = "Ảnh trong tin nhắn";
+          bubble.appendChild(image);
+        } else {
+          bubble.textContent = message.text;
+        }
+
+        const time = document.createElement("div");
+        time.className = "message-time";
+        time.textContent =
+          `${message.side === "me" ? "Bạn" : bot.name} • ${message.time}`;
+
+        const actions = document.createElement("div");
+        actions.className = "message-actions";
+        actions.appendChild(
+          createReportButton({
+            kind: "message",
+            botKey,
+            messageId: message.id
+          })
+        );
+
+        article.append(bubble, time, actions);
+        box.appendChild(article);
+      });
+
+      if (isConversationBlocked(botKey)) {
+        const notice = document.createElement("div");
+        notice.className = "blocked-notice";
+        notice.innerHTML =
+          "🚫 Tài khoản này đã bị chặn.<br>" +
+          "Hai bên không thể gửi hoặc nhận tin nhắn.";
+        box.appendChild(notice);
+      }
+
+      box.scrollTop = box.scrollHeight;
+    }
+
+    function botReply() {
+      const botKey = state.currentBot;
+
+      if (
+        isConversationBlocked(botKey) ||
+        state.blocked[botKey]
+      ) {
+        return;
+      }
+
+      const replies = botKey === "advisor"
+        ? [advisorReply(state.messages[botKey].filter(m => m.side === "me").at(-1)?.text || "")]
+        : [
+          "Mình hiểu rồi, hãy giữ lời nói lịch sự nhé.",
+          "Nếu thấy nội dung không phù hợp, bạn có thể bấm Báo cáo.",
+          "Zalora đang bảo vệ cuộc trò chuyện này.",
+          "Nói chuyện vui vẻ và an toàn nha!"
+        ];
+
+      state.messages[botKey].push({
+        id: Date.now() + Math.random(),
+        side: "friend",
+        text: replies[Math.floor(Math.random() * replies.length)],
+        image: "",
+        time: nowTime(),
+        deleted: false,
+        reason: ""
+      });
+
+      renderMessages();
+    }
+
+    function sendTextMessage(text, side = "me", image = "") {
+      const botKey = state.currentBot;
+      const value = String(text || "").trim();
+
+      if (!value && !image) return;
+
+      if (isConversationBlocked(botKey)) {
+        showToast("🚫 Cuộc trò chuyện đã bị chặn hai chiều.");
+        return;
+      }
+
+      const sender = side === "me" ? "me" : botKey;
+
+      if (state.blocked[sender]) {
+        showToast("🚫 Tài khoản này đã bị khóa quyền gửi.");
+        return;
+      }
+
+      const message = {
+        id: Date.now() + Math.random(),
+        side,
+        text: value,
+        image,
+        time: nowTime(),
+        deleted: false,
+        reason: ""
+      };
+
+      state.messages[botKey].push(message);
+      renderMessages();
+
+      if (image) {
+        showToast("✅ Ảnh đã được gửi.");
+        return;
+      }
+
+      const spamCheck = getSpamInfo(botKey, side, value);
+      if (spamCheck.blocked) {
+        scheduleSpamRetraction(message, botKey, spamCheck.reason);
+        return;
+      }
+
+      const violation = detectViolation(value);
+      const linkCheck = inspectLinks(value);
+
+      if (violation || linkCheck.blocked) {
+        const reason = violation || linkCheck.reason;
+        message.reason = reason;
+        addViolation(sender, reason);
+
+        showToast("⚠️ Tin nhắn sẽ được thu hồi sau 2 giây.");
+
+        setTimeout(() => {
+          const found = state.messages[botKey]
+            .find(item => item.id === message.id);
+
+          if (!found) return;
+
+          found.deleted = true;
+          renderMessages();
+
+          showToast(
+            "⚠️ Hệ thống đã thu hồi tin nhắn vi phạm."
+          );
+        }, 2000);
+
+        return;
+      }
+
+      showToast("Đã gửi tin nhắn.");
+
+      if (side === "me") {
+        setTimeout(() => {
+          if (!isConversationBlocked(botKey)) {
+            botReply();
+          }
+        }, 700);
+      }
+    }
+
+    function updateChatTools() {
+      const isAdvisor = state.currentBot === "advisor";
+      const tools = $("chatTools");
+      const sensitiveButton = $("botSensitiveButton");
+      const switchButton = $("switchRoleButton");
+
+      if (!tools) return;
+
+      // Tư vấn is intentionally the only bot without these two demo controls.
+      tools.style.display = isAdvisor ? "none" : "flex";
+
+      if (sensitiveButton) {
+        sensitiveButton.disabled = isAdvisor;
+      }
+
+      if (switchButton) {
+        switchButton.disabled = isAdvisor;
+      }
+
+      if ($("roleName")) {
+        $("roleName").textContent =
+          state.role === "me"
+            ? "Bạn"
+            : bots[state.currentBot].name;
+      }
+    }
+
+    function botSensitiveMessage() {
+      if (state.currentBot === "advisor") {
+        showToast("Tư vấn không có chức năng thử tin nhạy cảm.");
+        return;
+      }
+
+      // Moderation-test examples are intentionally non-explicit.
+      const samples = [
+        "ĐMM",
+        "CLM",
+        "cai lon ma may",
+        "ditmemaythangngu",
+        "chó đẻ",
+        "con chó",
+        "CMM",
+        "con mẹ mày",
+        "dâm",
+        "đĩ",
+        "Đồ ngu"
+      ];
+
+      const sample =
+        samples[Math.floor(Math.random() * samples.length)];
+
+      sendTextMessage(sample, "friend");
+    }
+
+    function switchRole() {
+      if (state.currentBot === "advisor") {
+        showToast("Tư vấn không có chức năng đổi vai.");
+        return;
+      }
+
+      state.role = state.role === "me"
+        ? "friend"
+        : "me";
+
+      updateChatTools();
+
+      showToast(
+        `Đã đổi vai thành ${$("roleName").textContent}.`
+      );
+    }
+
+    function findReportedContent(target) {
+      if (!target) {
+        return {
+          text: "",
+          owner: "Không xác định",
+          item: null
+        };
+      }
+
+      if (target.kind === "post") {
+        const post = state.posts.find(item => {
+          return item.id === target.postId;
+        });
+
+        return {
+          text: post?.text || "",
+          owner: post?.author || "Không xác định",
+          item: post
+        };
+      }
+
+      if (target.kind === "comment") {
+        const post = state.posts.find(item => {
+          return item.id === target.postId;
+        });
+
+        const comment = post?.comments.find(item => {
+          return item.id === target.commentId;
+        });
+
+        return {
+          text: comment?.text || "",
+          owner: comment?.author || "Không xác định",
+          item: comment
+        };
+      }
+
+      if (target.kind === "message") {
+        const message = state.messages[target.botKey].find(item => {
+          return item.id === target.messageId;
+        });
+
+        return {
+          text: message?.text || "",
+          owner: bots[target.botKey].name,
+          item: message
+        };
+      }
+
+      return {
+        text: "",
+        owner: "Không xác định",
+        item: null
+      };
+    }
+
+    function openReport(target) {
+      state.reportTarget = { ...target };
+
+      $("reportDescription").value = "";
+
+      document
+        .querySelectorAll('input[name="reportReason"]')
+        .forEach(input => {
+          input.checked = false;
+        });
+
+      $("reportOverlay").classList.add("show");
+    }
+
+    function closeReport() {
+      state.reportTarget = null;
+      $("reportOverlay").classList.remove("show");
+    }
+
+    function submitReport() {
+      const reason = document.querySelector(
+        'input[name="reportReason"]:checked'
+      );
+
+      if (!reason) {
+        showToast("Vui lòng chọn lý do báo cáo.");
+        return;
+      }
+
+      if (!state.reportTarget) {
+        showToast("Không tìm thấy nội dung cần báo cáo.");
+        closeReport();
+        return;
+      }
+
+      const target = { ...state.reportTarget };
+      const content = findReportedContent(target);
+
+      const report = {
+        id: Date.now(),
+        reason: reason.value,
+        description: $("reportDescription").value.trim(),
+        preview: content.text || "Hình ảnh hoặc nội dung",
+        owner: content.owner,
+        target,
+        status: "pending"
+      };
+
+      state.reports++;
+      state.reportsList.unshift(report);
+
+      addActivity(
+        `🤖 AI security đã tiếp nhận báo cáo của ${content.owner}.`
+      );
+
+      addNotification(
+        "AI security đã tiếp nhận báo cáo của bạn."
+      );
+
+      renderReports();
+      closeReport();
+      showScreen("aiSecurity");
+
+      addAiMessage("ai", AI_RECEIVED_MESSAGE);
+
+      addAiMessage(
+        "ai",
+        `📄 Báo cáo của bạn:\n${content.owner} — ${content.text || "Nội dung hình ảnh"}\n\nTrạng thái: ⏳ Đang kiểm tra...`
+      );
+
+      showToast("🤖 Báo cáo đã được gửi đến AI security.");
+
+      setTimeout(() => {
+        processReport(report);
+      }, AI_REVIEW_DELAY);
+    }
+
+    function processReport(report) {
+      const content = findReportedContent(report.target);
+      const violation = detectViolation(content.text);
+
+      report.status = "resolved";
+
+      if (violation && content.item) {
+        if (report.target.kind === "comment") {
+          content.item.removed = true;
+
+          addActivity(
+            `✅ AI security đã thu hồi bình luận của ${content.owner}.`
+          );
+
+          addNotification(
+            "AI security đã xóa bình luận vi phạm."
+          );
+
+          addAiMessage(
+            "ai",
+            `✅ Báo cáo đã được xử lý.\n\nBình luận của ${content.owner} đã bị xóa vì vi phạm tiêu chuẩn cộng đồng.\n\n${AI_SUCCESS_MESSAGE}`
+          );
+
+          showToast("✅ AI security đã xóa bình luận vi phạm.");
+        }
+
+        if (report.target.kind === "post") {
+          content.item.removed = true;
+
+          addActivity(
+            `✅ AI security đã thu hồi bài viết của ${content.owner}.`
+          );
+
+          addAiMessage(
+            "ai",
+            `✅ Báo cáo đã được xử lý.\n\nBài viết của ${content.owner} đã bị thu hồi.\n\n${AI_SUCCESS_MESSAGE}`
+          );
+
+          showToast("✅ AI security đã xóa bài viết.");
+        }
+
+        if (report.target.kind === "message") {
+          content.item.deleted = true;
+          content.item.reason = violation;
+
+          addActivity(
+            `✅ AI security đã thu hồi tin nhắn của ${content.owner}.`
+          );
+
+          addAiMessage(
+            "ai",
+            `✅ Báo cáo đã được xử lý.\n\nTin nhắn của ${content.owner} đã bị thu hồi.\n\n${AI_SUCCESS_MESSAGE}`
+          );
+
+          showToast("✅ AI security đã thu hồi tin nhắn.");
+        }
+      } else {
+        addActivity(
+          "ℹ️ AI security xử lý xong nhưng chưa phát hiện vi phạm rõ ràng."
+        );
+
+        addAiMessage("ai", AI_SAFE_MESSAGE);
+        showToast("ℹ️ AI security đã xử lý báo cáo.");
+      }
+
+      renderReports();
+      renderFeed();
+      renderMessages();
+    }
+
+    function blockAccount(botKey) {
+      const botName = bots[botKey]?.name || "Tài khoản";
+
+      state.blocked[botKey] = true;
+      state.blockedConversations[botKey] = true;
+
+      addActivity(
+        `🚫 Bạn đã chặn ${botName}. Hai bên không thể nhắn tin nữa.`
+      );
+
+      addNotification(
+        `Bạn đã chặn ${botName}. Cuộc trò chuyện bị khóa hai chiều.`
+      );
+
+      closeBlockAccountPrompt();
+      renderMessages();
+      updateChatBlockedState();
+      updateStats();
+
+      showToast(
+        `🚫 Đã chặn ${botName}. Hai bên không thể nhắn tin.`
+      );
+    }
+
+    document.querySelectorAll(".nav-button").forEach(button => {
+      button.onclick = () => {
+        showScreen(button.dataset.screen);
+      };
+    });
+
+    document.querySelectorAll(".conversation").forEach(button => {
+      button.onclick = () => {
+        state.currentBot = button.dataset.bot;
+
+        document.querySelectorAll(".conversation").forEach(item => {
+          item.classList.remove("active");
+        });
+
+        button.classList.add("active");
+        updateChatTools();
+        showScreen("messages");
+      };
+    });
+
+    $("postButton").onclick = publishPost;
+
+    $("postImageInput").onchange = event => {
+      handlePostImage(event.target.files[0]);
+      event.target.value = "";
+    };
+
+    $("postVideoInput").onchange = event => {
+      handlePostVideo(event.target.files[0]);
+      event.target.value = "";
+    };
+
+    $("composer").onsubmit = event => {
+      event.preventDefault();
+
+      const input = $("messageInput");
+      const text = input.value.trim();
+
+      if (!text) return;
+
+      input.value = "";
+      sendTextMessage(text, state.role);
+    };
+
+    $("messageInput").onkeydown = event => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        $("composer").requestSubmit();
+      }
+    };
+
+    $("messageImageButton").onclick = () => {
+      $("messageImageInput").click();
+    };
+
+    $("messageImageInput").onchange = event => {
+      handleMessageImage(event.target.files[0]);
+      event.target.value = "";
+    };
+
+    $("botSensitiveButton").onclick = botSensitiveMessage;
+    $("switchRoleButton").onclick = switchRole;
+
+    $("cancelReport").onclick = closeReport;
+    $("submitReport").onclick = submitReport;
+
+    $("reportOverlay").onclick = event => {
+      if (event.target === $("reportOverlay")) {
+        closeReport();
+      }
+    };
+
+    $("aiComposer").onsubmit = event => {
+      event.preventDefault();
+
+      const input = $("aiMessageInput");
+      const text = input.value.trim();
+
+      if (!text) return;
+
+      input.value = "";
+      addAiMessage("user", text);
+
+      setTimeout(() => {
+        const securityReply = detectSelfHarm(text)
+          ? "Mình nghe bạn. Nếu bạn đang có nguy cơ làm đau bản thân ngay lúc này, hãy tìm một người đáng tin ở cạnh và liên hệ hỗ trợ khẩn cấp tại nơi bạn đang ở. Bạn có thể kể mình nghe điều gì đang xảy ra không?"
+          : advisorReply(text);
+
+        addAiMessage("ai", securityReply);
+      }, 500);
+    };
+
+    $("aiMessageInput").onkeydown = event => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        $("aiComposer").requestSubmit();
+      }
+    };
+
+    $("blockYes").onclick = () => {
+      const botKey = $("blockAccountOverlay").dataset.botKey;
+
+      if (botKey) {
+        blockAccount(botKey);
+      }
+    };
+
+    $("blockNo").onclick = () => {
+      const botKey = $("blockAccountOverlay").dataset.botKey;
+      const botName = bots[botKey]?.name || "Tài khoản";
+
+      addActivity(`ℹ️ Bạn không chặn tài khoản ${botName}.`);
+      addNotification(`Bạn đã chọn không chặn tài khoản ${botName}.`);
+
+      closeBlockAccountPrompt();
+      showToast(`Bạn vẫn cho phép ${botName} nhắn tin.`);
+    };
+
+    $("blockAccountOverlay").onclick = event => {
+      if (event.target === $("blockAccountOverlay")) {
+        closeBlockAccountPrompt();
+      }
+    };
+
+    renderFeed();
+    renderMessages();
+    renderNotifications();
+    renderReports();
+    renderAiMessages();
+    updateChatBlockedState();
+    updateStats();
+    updateChatTools();
+  </script>
+</body>
+</html>
