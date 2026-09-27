@@ -2403,14 +2403,13 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
       if (await hasLargeRedRegion(dataUrl)) {
         return {
           blocked: true,
-          reason: "phát hiện vùng màu đỏ đậm lan rộng, có thể là máu"
+          reason: "phát hiện vùng đỏ đậm lan rộng, có thể là máu"
         };
       }
 
       const ready = await imageModerationReady;
 
-      // Nếu model CDN lỗi, không chặn toàn bộ ảnh bình thường.
-      // Khi đó chỉ còn luật pixel ở trên.
+      // Nếu model CDN lỗi thì không được chặn ảnh bình thường chỉ vì model lỗi.
       if (!ready || !imageModerationModel) {
         return {
           blocked: false,
@@ -2423,24 +2422,25 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
 
         image.onload = async () => {
           try {
-            const predictions = await imageModerationModel.classify(image, 5);
+            // Lấy nhiều nhãn hơn để tăng khả năng bắt ảnh minh hoạ/cartoon.
+            const predictions = await imageModerationModel.classify(image, 10);
 
             const porn = getPredictionProbability(predictions, "Porn");
             const hentai = getPredictionProbability(predictions, "Hentai");
             const sexy = getPredictionProbability(predictions, "Sexy");
 
-            // Porn/Hentai là tín hiệu chính cho nude/bộ phận sinh dục.
-            // Sexy chỉ chặn ở ngưỡng rất cao để không chặn selfie,
-            // du lịch, thời trang hoặc ảnh đời thường.
+            // Hentai là tín hiệu quan trọng với anime/cartoon nhạy cảm.
+            // Hạ ngưỡng vừa phải để bắt hình minh hoạ nhưng vẫn tránh
+            // dùng Sexy làm lý do chặn ảnh đời thường.
             const sensitiveContent =
-              porn >= 0.80 ||
-              hentai >= 0.80 ||
-              sexy >= 0.98;
+              porn >= 0.55 ||
+              hentai >= 0.45 ||
+              sexy >= 0.97;
 
             resolve({
               blocked: sensitiveContent,
               reason: sensitiveContent
-                ? "phát hiện ảnh nude hoặc nội dung liên quan bộ phận sinh dục"
+                ? "phát hiện hình ảnh nude, bộ phận sinh dục hoặc hình minh hoạ nhạy cảm"
                 : "",
               predictions
             });
