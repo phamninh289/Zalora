@@ -2332,7 +2332,7 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
 
         tf.enableProdMode();
         await tf.ready();
-        imageModerationModel = await nsfwjs.load();
+        imageModerationModel = await nsfwjs.load("https://cdn.jsdelivr.net/gh/infinitered/nsfwjs@master/models/mobilenet_v2/");
         return true;
       } catch (error) {
         console.error("AI image moderation load error:", error);
@@ -2365,21 +2365,20 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
 
             const porn = getPredictionProbability(predictions, "Porn");
             const hentai = getPredictionProbability(predictions, "Hentai");
+            const sexy = getPredictionProbability(predictions, "Sexy");
 
-            // Chỉ dùng tín hiệu nội dung tình dục rõ ràng.
-            // KHÔNG dùng nhãn "Sexy" vì nhãn này có thể nhận nhầm
-            // ảnh khuôn mặt, ảnh du lịch, thời trang hoặc chân dung bình thường.
-            if (porn >= 0.70 || hentai >= 0.70) {
-              resolve({
-                blocked: true,
-                reason: "AI phát hiện ảnh có nội dung tình dục/khỏa thân"
-              });
-              return;
-            }
+            // Chỉ chặn khi AI có tín hiệu rất rõ về nội dung tình dục.
+            // Không dùng màu ảnh, tên file hoặc khuôn mặt để quyết định.
+            const sexualContent =
+              porn >= 0.80 ||
+              hentai >= 0.80 ||
+              (sexy >= 0.92 && porn >= 0.05);
 
             resolve({
-              blocked: false,
-              reason: "",
+              blocked: sexualContent,
+              reason: sexualContent
+                ? "AI phát hiện ảnh có nội dung tình dục/khỏa thân"
+                : "",
               predictions
             });
           } catch (error) {
@@ -2402,74 +2401,6 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
       });
     }
 
-    function inspectImagePixels(dataUrl) {
-      return new Promise(resolve => {
-        const image = new Image();
-
-        image.onload = () => {
-          const canvas = document.createElement("canvas");
-          const context = canvas.getContext("2d", {
-            willReadFrequently: true
-          });
-
-          const size = 100;
-          canvas.width = size;
-          canvas.height = size;
-
-          context.drawImage(image, 0, 0, size, size);
-
-          const pixels = context.getImageData(
-            0,
-            0,
-            size,
-            size
-          ).data;
-
-          let totalPixels = 0;
-          let redPixels = 0;
-
-          for (let i = 0; i < pixels.length; i += 4) {
-            const red = pixels[i];
-            const green = pixels[i + 1];
-            const blue = pixels[i + 2];
-            const alpha = pixels[i + 3];
-
-            if (alpha < 30) continue;
-
-            totalPixels++;
-
-            if (
-              red > 120 &&
-              red > green * 1.35 &&
-              red > blue * 1.25
-            ) {
-              redPixels++;
-            }
-          }
-
-          const redRatio = totalPixels
-            ? redPixels / totalPixels
-            : 0;
-
-          resolve({
-            blocked: redRatio >= .48,
-            reason: redRatio >= .48
-              ? "ảnh có dấu hiệu máu me hoặc bạo lực"
-              : ""
-          });
-        };
-
-        image.onerror = () => {
-          resolve({
-            blocked: true,
-            reason: "không thể đọc hình ảnh để kiểm tra"
-          });
-        };
-
-        image.src = dataUrl;
-      });
-    }
-
     async function scanSensitiveImage(file, dataUrl) {
       if (!file || !file.type.startsWith("image/")) {
         return {
@@ -2478,9 +2409,7 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
         };
       }
 
-      // Quét trực tiếp nội dung ảnh bằng AI.
-      // Không chặn dựa trên tên file, màu đỏ, khuôn mặt,
-      // ảnh du lịch hay ảnh đời thường.
+      // Quyết định hoàn toàn dựa trên nội dung hình ảnh được AI phân loại.
       return await inspectImageWithAI(dataUrl);
     }
 
