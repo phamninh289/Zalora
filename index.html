@@ -2349,7 +2349,6 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
     async function inspectImageWithAI(dataUrl) {
       const ready = await imageModerationReady;
 
-      // Fail closed: nếu AI chưa sẵn sàng thì không cho ảnh đi tiếp.
       if (!ready || !imageModerationModel) {
         return {
           blocked: true,
@@ -2365,19 +2364,15 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
             const predictions = await imageModerationModel.classify(image, 5);
 
             const porn = getPredictionProbability(predictions, "Porn");
-            const sexy = getPredictionProbability(predictions, "Sexy");
             const hentai = getPredictionProbability(predictions, "Hentai");
 
-            // "Sexy" của NSFWJS có thể đánh điểm cao với ảnh chân dung,
-            // nên không dùng ngưỡng thấp để chặn mặt người bình thường.
-            // Chỉ chặn "Sexy" khi điểm rất cao và có thêm tín hiệu NSFW.
-            const strongSexySignal =
-              sexy >= 0.88 && (porn >= 0.12 || hentai >= 0.12);
-
-            if (porn >= 0.55 || hentai >= 0.60 || strongSexySignal) {
+            // Chỉ dùng tín hiệu nội dung tình dục rõ ràng.
+            // KHÔNG dùng nhãn "Sexy" vì nhãn này có thể nhận nhầm
+            // ảnh khuôn mặt, ảnh du lịch, thời trang hoặc chân dung bình thường.
+            if (porn >= 0.70 || hentai >= 0.70) {
               resolve({
                 blocked: true,
-                reason: "AI phát hiện ảnh có dấu hiệu nội dung nhạy cảm/khỏa thân"
+                reason: "AI phát hiện ảnh có nội dung tình dục/khỏa thân"
               });
               return;
             }
@@ -2483,26 +2478,10 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
         };
       }
 
-      // Tên file chỉ là lớp phụ, không phải kết quả quét ảnh.
-      if (hasSensitiveImageName(file)) {
-        return {
-          blocked: true,
-          reason: "tên ảnh có chứa từ khóa nhạy cảm"
-        };
-      }
-
-      // BẮT BUỘC quét nội dung hình ảnh trước khi cho phép sử dụng ảnh.
-      const aiResult = await inspectImageWithAI(dataUrl);
-      if (aiResult.blocked) return aiResult;
-
-      // Giữ lớp heuristic cũ như lớp bổ sung cho dấu hiệu máu/bạo lực.
-      const pixelResult = await inspectImagePixels(dataUrl);
-      if (pixelResult.blocked) return pixelResult;
-
-      return {
-        blocked: false,
-        reason: ""
-      };
+      // Quét trực tiếp nội dung ảnh bằng AI.
+      // Không chặn dựa trên tên file, màu đỏ, khuôn mặt,
+      // ảnh du lịch hay ảnh đời thường.
+      return await inspectImageWithAI(dataUrl);
     }
 
     function readImage(file, callback) {
