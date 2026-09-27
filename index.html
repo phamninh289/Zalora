@@ -2336,15 +2336,25 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
       }
     })();
 
-    function getPredictionProbability(predictions, className) {
-      const item = predictions.find(prediction => prediction.className === className);
-      return item ? Number(item.probability || 0) : 0;
+    // Image moderation tối giản: không dùng AI/NSFWJS.
+    // Ảnh bình thường được phép đăng. Chỉ áp dụng luật pixel đơn giản
+    // cho vùng đỏ đậm lan rộng; không đọc tên file và không nhận diện khuôn mặt.
+    async function inspectImageWithAI(dataUrl) {
+      const redRegion = await hasLargeRedRegion(dataUrl);
+
+      if (redRegion) {
+        return {
+          blocked: true,
+          reason: "phát hiện vùng màu đỏ đậm lan rộng trong hình ảnh"
+        };
+      }
+
+      return {
+        blocked: false,
+        reason: ""
+      };
     }
 
-    // Chỉ giữ 2 kiểu nhận diện trực tiếp trên ảnh:
-    // 1) vùng đỏ đậm lan rộng -> tín hiệu hình ảnh có máu;
-    // 2) AI chỉ dùng 3 nhãn liên quan nội dung nhạy cảm: Porn / Hentai / Sexy.
-    // Không đọc tên file, không dò từ trong tên file, không nhận diện khuôn mặt.
     function hasLargeRedRegion(dataUrl) {
       return new Promise(resolve => {
         const image = new Image();
@@ -2353,8 +2363,8 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
           try {
             const canvas = document.createElement("canvas");
             const ctx = canvas.getContext("2d", { willReadFrequently: true });
-
             const size = 180;
+
             canvas.width = size;
             canvas.height = size;
             ctx.drawImage(image, 0, 0, size, size);
@@ -2367,7 +2377,6 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
               const g = pixels[i + 1];
               const b = pixels[i + 2];
 
-              // Chỉ tính vùng đỏ đậm, bão hòa cao.
               if (
                 r >= 105 &&
                 r > g * 1.35 &&
@@ -2378,84 +2387,14 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
               }
             }
 
-            // Cần vùng đỏ chiếm đủ lớn trong ảnh mới coi là tín hiệu.
             resolve(redPixels / (size * size) >= 0.18);
           } catch (error) {
-            console.warn("Không thể kiểm tra vùng đỏ:", error);
+            console.warn("Không thể kiểm tra pixel:", error);
             resolve(false);
           }
         };
 
         image.onerror = () => resolve(false);
-        image.src = dataUrl;
-      });
-    }
-
-    async function inspectImageWithAI(dataUrl) {
-      // Ảnh bình thường không bị chặn chỉ vì model AI không tải được.
-      // Đây là demo client-side nên nếu AI không sẵn sàng, vẫn cho đăng.
-      const redRegion = await hasLargeRedRegion(dataUrl);
-
-      if (redRegion) {
-        return {
-          blocked: true,
-          reason: "phát hiện vùng màu đỏ đậm lan rộng trong hình ảnh"
-        };
-      }
-
-      const ready = await imageModerationReady;
-
-      if (!ready || !imageModerationModel) {
-        return {
-          blocked: false,
-          reason: ""
-        };
-      }
-
-      return new Promise(resolve => {
-        const image = new Image();
-
-        image.onload = async () => {
-          try {
-            const predictions = await imageModerationModel.classify(image, 5);
-
-            const porn = getPredictionProbability(predictions, "Porn");
-            const hentai = getPredictionProbability(predictions, "Hentai");
-            const sexy = getPredictionProbability(predictions, "Sexy");
-
-            // Chỉ chặn tín hiệu rất rõ của nội dung nude/tình dục.
-            // Không dùng Sexy ở ngưỡng thấp để tránh chặn selfie, du lịch,
-            // đồ bơi hoặc ảnh đời thường.
-            const sensitiveContent =
-              porn >= 0.80 ||
-              hentai >= 0.80 ||
-              sexy >= 0.98;
-
-            resolve({
-              blocked: sensitiveContent,
-              reason: sensitiveContent
-                ? "phát hiện hình ảnh nude/nội dung tình dục"
-                : "",
-              predictions
-            });
-          } catch (error) {
-            console.error("AI image classification error:", error);
-
-            // Lỗi AI không làm ảnh bình thường bị chặn.
-            resolve({
-              blocked: false,
-              reason: ""
-            });
-          }
-        };
-
-        image.onerror = () => {
-          resolve({
-            blocked: false,
-            reason: ""
-          });
-        };
-
         image.src = dataUrl;
       });
     }
