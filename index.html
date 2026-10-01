@@ -2219,7 +2219,7 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
       }
 
       const host = url.hostname.toLowerCase();
-      const urlText = normalizeText(`${host} ${url.pathname} ${url.search}`);
+      const urlText = normalizeText(`${host} ${url.pathname} ${url.search}`);\n\n      // Chặn link có từ "sex", kể cả domain như vnsextop1.com.\n      if (/sex/i.test(host) || /sex/i.test(url.pathname) || /sex/i.test(url.search)) {\n        return "đường link chứa từ khóa nội dung người lớn (sex)";\n      }
 
       // Chỉ kiểm tra URL/path/query, không kiểm tra caption.
       // Từ khóa đơn phải là token độc lập trong URL để tránh:
