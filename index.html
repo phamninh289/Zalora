@@ -1969,151 +1969,980 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
         );
       });
 
-      function bindClick(id, handler) {
-      const element = $(id);
-      if (!element) return;
-      element.onclick = event => {
-        event.preventDefault();
-        handler(event);
+      document.querySelectorAll(".nav-button").forEach(button => {
+        button.classList.toggle(
+          "active",
+          button.dataset.screen === name
+        );
+      });
+
+      const titles = {
+        home: "Trang chủ",
+        messages: "Tin nhắn",
+        notifications: "Thông báo",
+        reports: "Báo cáo của tôi",
+        aiSecurity: "AI security",
+        safety: "Trung tâm an toàn"
       };
+
+      $("screenTitle").textContent = titles[name];
+
+      if (name === "messages") {
+        renderMessages();
+        updateChatBlockedState();
+      }
+
+      if (name === "notifications") renderNotifications();
+      if (name === "reports") renderReports();
+      if (name === "aiSecurity") renderAiMessages();
+      if (name === "safety") updateStats();
     }
 
-    document.querySelectorAll(".nav-button").forEach(button => {
-      button.type = "button";
-      button.onclick = event => {
-        event.preventDefault();
-        showScreen(button.dataset.screen);
-      };
-    });
+    /*
+     * Lớp chuẩn hóa riêng cho kiểm duyệt:
+     * - bỏ dấu tiếng Việt
+     * - xử lý Telex (uw/ow/aw/dd...)
+     * - đổi một số ký tự teencode (0/3/4/@/5/7/j...)
+     * - bỏ ký tự chen giữa để bắt các kiểu m.oc, d@.m, chjm...
+     *
+     * Không đụng vào giao diện hay dữ liệu hiển thị của Zalora.
+     */
+    function normalizeBlacklistText(value) {
+      let text = String(value || "")
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/đ/g, "d");
 
-    document.querySelectorAll(".conversation").forEach(button => {
-      button.type = "button";
-      button.onclick = event => {
-        event.preventDefault();
-        state.currentBot = button.dataset.bot;
-        document.querySelectorAll(".conversation").forEach(item => item.classList.remove("active"));
-        button.classList.add("active");
-        updateChatTools();
-        showScreen("messages");
-      };
-    });
+      // Telex phổ biến: nuwngs -> nungs, xep hinh -> xep hinh...
+      text = text
+        .replace(/aw/g, "a")
+        .replace(/aa/g, "a")
+        .replace(/ee/g, "e")
+        .replace(/oo/g, "o")
+        .replace(/ow/g, "o")
+        .replace(/uw/g, "u")
+        .replace(/dd/g, "d")
+        .replace(/0/g, "o")
+        .replace(/[1|!]/g, "i")
+        .replace(/3/g, "e")
+        .replace(/[4@]/g, "a")
+        .replace(/[5$]/g, "s")
+        .replace(/7/g, "t")
+        // Không đổi "j" thành "i" vì sẽ làm "BJ" va chạm với "bị"
+        // sau khi bỏ dấu (bị -> bi), gây false positive.
+        .replace(/[^a-z0-9+]+/g, " ")
+        .replace(/(.)\1{2,}/g, "$1$1")
+        .replace(/\s+/g, " ")
+        .trim();
 
-    bindClick("postButton", publishPost);
-
-    const postImageInput = $("postImageInput");
-    if (postImageInput) {
-      postImageInput.onchange = event => {
-        handlePostImage(event.target.files[0]);
-        event.target.value = "";
-      };
+      return text;
     }
 
-    const postVideoInput = $("postVideoInput");
-    if (postVideoInput) {
-      postVideoInput.onchange = event => {
-        handlePostVideo(event.target.files[0]);
-        event.target.value = "";
-      };
+    function collapseBlacklistText(value) {
+      return normalizeBlacklistText(value)
+        .replace(/\s+/g, "")
+        .replace(/(.)\1+/g, "$1");
     }
 
-    const composer = $("composer");
-    if (composer) {
-      composer.onsubmit = event => {
-        event.preventDefault();
-        const input = $("messageInput");
-        if (!input) return;
-        const text = input.value.trim();
-        if (!text) return;
-        input.value = "";
-        sendTextMessage(text, state.role);
-      };
+    /*
+     * Một số từ có nghĩa bình thường trong ngữ cảnh khác.
+     * Ví dụ "móc đồ", "móc khóa", "chim sẻ", "chim bồ câu", "bướm vàng".
+     * Các cụm này được phép; những cách viết lách/teencode tương ứng
+     * vẫn được chuẩn hóa trước khi so sánh.
+     */
+    const moderationSafeContexts = {
+      "moc": [
+        "moc do", "moc khoa", "moc ao", "moc len", "moc tui",
+        "moc treo", "moc quan ao"
+      ],
+      "chim": [
+        "chim se", "chim bo cau", "chim yen", "chim en",
+        "chim canh", "chim hoa", "chim vang", "chim trang"
+      ],
+      "buom": [
+        "buom bay", "buom dem", "buom vang", "buom trang",
+        "buom hoa"
+      ],
+      "nung": [
+        "nung gach", "nung dat", "nung gom", "nung voi",
+        "lo nung", "nhiet nung"
+      ],
+      "cu": [
+        "cu rua", "cu gia", "cu ong", "cu ba"
+      ],
+      "dam": [
+        "dam cuoi", "dam hoi", "dam tang", "dam phan",
+        "dam bao", "dam minh", "dam thoi", "dam day"
+      ]
+    };
+
+    function isModerationSafeContext(text, word) {
+      const clean = normalizeBlacklistText(text);
+      const collapsed = collapseBlacklistText(text);
+      const key = collapseBlacklistText(word);
+
+      const safePhrases = moderationSafeContexts[key] || [];
+      return safePhrases.some(phrase => {
+        const p = normalizeBlacklistText(phrase);
+        const cp = collapseBlacklistText(phrase);
+        return clean.includes(p) || collapsed.includes(cp);
+      });
     }
 
-    const messageInput = $("messageInput");
-    if (messageInput) {
-      messageInput.onkeydown = event => {
-        if (event.key === "Enter") {
-          event.preventDefault();
-          $("composer")?.requestSubmit();
+    /*
+     * Chỉ bắt từ độc lập.
+     * Vì vậy:
+     * - "người yêu tôi" không bị chặn bởi từ "ngu".
+     * - "người iu tôi" không bị chặn.
+     * - "đồ ngu" vẫn bị chặn.
+     * - "yêu" không nằm trong blacklist.
+     */
+    function hasBlacklistMatch(text, words) {
+      const cleanText = normalizeBlacklistText(text);
+      const rawTokens = getModerationTokens(text);
+      const normalizedTokens = cleanText.split(/\s+/).filter(Boolean);
+
+      return words.some(word => {
+        const cleanWord = normalizeBlacklistText(word);
+
+        if (!cleanWord || isModerationSafeContext(text, word)) return false;
+
+        if (cleanWord.includes(" ")) {
+          const escaped = cleanWord.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          return new RegExp(`(^|\\s)${escaped}(?=\\s|$)`).test(cleanText);
         }
-      };
-    }
 
-    bindClick("messageImageButton", () => {
-      $("messageImageInput")?.click();
-    });
+        for (let i = 0; i < normalizedTokens.length; i++) {
+          if (normalizedTokens[i] !== cleanWord) continue;
 
-    const messageImageInput = $("messageImageInput");
-    if (messageImageInput) {
-      messageImageInput.onchange = event => {
-        handleMessageImage(event.target.files[0]);
-        event.target.value = "";
-      };
-    }
+          const rawToken = rawTokens[i] || "";
+          if (isAccentCollision(rawToken, cleanWord)) continue;
 
-    bindClick("botSensitiveButton", botSensitiveMessage);
-    bindClick("switchRoleButton", switchRole);
-    bindClick("cancelReport", closeReport);
-    bindClick("submitReport", submitReport);
-
-    const reportOverlay = $("reportOverlay");
-    if (reportOverlay) {
-      reportOverlay.onclick = event => {
-        if (event.target === reportOverlay) closeReport();
-      };
-    }
-
-    const aiComposer = $("aiComposer");
-    if (aiComposer) {
-      aiComposer.onsubmit = event => {
-        event.preventDefault();
-        const input = $("aiMessageInput");
-        if (!input) return;
-        const text = input.value.trim();
-        if (!text) return;
-        input.value = "";
-        addAiMessage("user", text);
-        setTimeout(() => {
-          const securityReply = detectSelfHarm(text)
-            ? "Mình nghe bạn. Nếu bạn đang có nguy cơ làm đau bản thân ngay lúc này, hãy tìm một người đáng tin ở cạnh và liên hệ hỗ trợ khẩn cấp tại nơi bạn đang ở. Bạn có thể kể mình nghe điều gì đang xảy ra không?"
-            : advisorReply(text);
-          addAiMessage("ai", securityReply);
-        }, 500);
-      };
-    }
-
-    const aiMessageInput = $("aiMessageInput");
-    if (aiMessageInput) {
-      aiMessageInput.onkeydown = event => {
-        if (event.key === "Enter") {
-          event.preventDefault();
-          $("aiComposer")?.requestSubmit();
+          return true;
         }
-      };
+
+        return false;
+      });
     }
 
-    bindClick("blockYes", () => {
-      const botKey = $("blockAccountOverlay")?.dataset.botKey;
-      if (botKey) blockAccount(botKey);
-    });
+    function detectViolation(text) {
+      // Người dùng được phép kể lại trải nghiệm bị bạo lực/bắt nạt.
+      // Chỉ các câu có dấu hiệu đe dọa hoặc chủ động gây hại mới bị chặn.
+      // Một số từ có nghĩa bình thường theo ngữ cảnh (ví dụ "móc đồ",
+      // "chim sẻ", "chim bồ câu") không được coi là nội dung nhạy cảm.
+      const cleanForContext = normalizeText(text);
+      const benignContext =
+        /\bmoc do\b|\bmoc khoa\b|\bchim se\b|\bchim bo cau\b|\bchim canh cut\b|\bchim ung\b/.test(cleanForContext);
 
-    bindClick("blockNo", () => {
-      const botKey = $("blockAccountOverlay")?.dataset.botKey;
-      const botName = bots[botKey]?.name || "Tài khoản";
-      addActivity(`ℹ️ Bạn không chặn tài khoản ${botName}.`);
-      addNotification(`Bạn đã chọn không chặn tài khoản ${botName}.`);
-      closeBlockAccountPrompt();
-      showToast(`Bạn vẫn cho phép ${botName} nhắn tin.`);
-    });
+      if (hasBlacklistMatch(text, blacklist.harassment) ||
+          (!benignContext && hasObfuscatedBlacklistMatch(text))) {
+        return "quấy rối hoặc nội dung nhạy cảm";
+      }
 
-    const blockAccountOverlay = $("blockAccountOverlay");
-    if (blockAccountOverlay) {
-      blockAccountOverlay.onclick = event => {
-        if (event.target === blockAccountOverlay) closeBlockAccountPrompt();
-      };
+      if (hasBlacklistMatch(text, blacklist.sexual)) {
+        return "nội dung tình dục/ô dâm";
+      }
+
+      if (hasBlacklistMatch(text, blacklist.violence)) {
+        return "đe dọa hoặc bạo lực";
+      }
+
+      if (hasBlacklistMatch(text, blacklist.gambling)) {
+        return "cá độ/cờ bạc";
+      }
+
+      if (hasBlacklistMatch(text, blacklist.profanity)) {
+        return "ngôn từ xúc phạm";
+      }
+
+      return "";
     }
 
-    renderFeed();
+    function detectAdvisorSupportNeed(text) {
+      const raw = String(text || "");
+      const clean = normalizeText(raw);
+      const collapsed = collapseForModeration(raw);
+
+      // Bài tâm sự/cần giúp đỡ vẫn được đăng. Hàm này chỉ dùng để
+      // chuyển bài sang luồng hỗ trợ của Tư vấn và tắt bot social.
+      return advisorSupportPatterns.some(pattern => {
+        const p = normalizeText(pattern);
+        const compact = p.replace(/\s/g, "");
+        return clean.includes(p) || collapsed.includes(compact);
+      }) || detectSelfHarm(raw) ||
+        /(?:^|\s)44(?:\s|$)/.test(clean);
+    }
+
+    function generateAdvisorSupportMessage(postText) {
+      const quote = String(postText || "").trim().slice(0, 500);
+      const clean = normalizeText(postText);
+
+      if (detectSelfHarm(postText)) {
+        return `Mình vừa thấy bạn đăng: “${quote}”. Mình rất muốn ở đây với bạn. Chuyện bạn đang trải qua đáng được lắng nghe, và bạn không cần phải tự chịu đựng một mình. Trước hết, hãy tìm một người lớn hoặc người bạn thật sự tin tưởng để ở cạnh bạn. Nếu bạn cảm thấy mình có thể gặp nguy hiểm ngay lúc này, hãy tìm hỗ trợ khẩn cấp tại nơi bạn đang ở. Còn nếu bạn muốn, kể mình nghe chuyện gì đã xảy ra nhé — mình sẽ cùng bạn tìm từng bước an toàn tiếp theo.`;
+      }
+
+      if (/(bi bao luc|bi bat nat|nan nhan|bi danh|bi hanh hung|bi de doa|bi uy hiep|bi quay roi|khong an toan)/.test(clean)) {
+        return `Mình vừa phát hiện bạn đăng: “${quote}”. Bạn ơi, mình rất tiếc vì bạn đang phải trải qua chuyện này. Những gì bạn cảm thấy là đáng được tôn trọng và bạn không cần phải chịu một mình. Trước mắt, hãy ưu tiên ở nơi an toàn, tránh đối đầu một mình và lưu lại những bằng chứng nếu có. Bạn có thể tìm một người lớn đáng tin, giáo viên hoặc người thân để cùng bạn xử lý. Nếu muốn tâm sự, cứ kể mình nghe điều gì đã xảy ra; mình ở đây để lắng nghe và cùng bạn nghĩ cách phù hợp.`;
+      }
+
+      return `Mình vừa thấy bạn đăng: “${quote}”. Bạn ơi, mình có mặt ở đây để lắng nghe. Có những ngày mọi chuyện thật sự rất nặng nề, nhưng bạn không nhất thiết phải tự ôm hết một mình. Nếu bạn muốn, hãy kể mình nghe điều khiến bạn buồn hoặc uất ức nhất; mình sẽ cùng bạn tháo từng nút một, không phán xét.`;
+    }
+
+
+    function extractUrls(text) {
+      const value = String(text || "");
+
+      // Nhận cả link có giao thức và domain được viết trực tiếp
+      // (ví dụ: https://sex.com, www.sex.com, sex.com).
+      return value.match(
+        /(?:https?:\/\/|www\.)[^\s<>"']+|(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}(?:\/[^\s<>"']*)?/gi
+      ) || [];
+    }
+
+    function normalizeDomainForCheck(host) {
+      return String(host || "")
+        .toLowerCase()
+        .replace(/^www\./, "")
+        .replace(/[а-яё]/g, "")
+        .normalize("NFKC")
+        .replace(/0/g, "o")
+        .replace(/[1il]/g, "l");
+    }
+
+    function suspiciousUrlReason(rawUrl) {
+      let url;
+      try {
+        url = new URL(/^https?:\/\//i.test(rawUrl) ? rawUrl : `https://${rawUrl}`);
+      } catch {
+        return "đường link không hợp lệ";
+      }
+
+      const host = url.hostname.toLowerCase();
+      const urlText = normalizeText(`${host} ${url.pathname} ${url.search}`);
+
+      // Chặn "sex" ngay cả khi nó nằm giữa tên miền, đường dẫn hoặc tham số.
+      if (/sex/i.test(host) || /sex/i.test(url.pathname) || /sex/i.test(url.search)) {
+        return "đường link chứa từ khóa nội dung người lớn (sex)";
+      }
+
+      // Chỉ kiểm tra URL/path/query, không kiểm tra caption.
+      // Từ khóa đơn phải là token độc lập trong URL để tránh:
+      // website -> bet, abcsexample -> sex, ...
+      if (suspiciousLinkKeywords.some(k => {
+        const keyword = normalizeText(k);
+        if (!keyword) return false;
+        const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const pattern = keyword.includes(" ")
+          ? `(^|[\\s/_.?=&-])${escaped}(?=$|[\\s/_.?=&-])`
+          : `(^|[\\s/_.?=&-])${escaped}(?=$|[\\s/_.?=&-])`;
+        return new RegExp(pattern).test(urlText);
+      })) {
+        return "đường link chứa từ khóa cá độ hoặc nội dung người lớn";
+      }
+
+      return "";
+    }
+
+    function inspectLinks(text) {
+      const urls = extractUrls(text);
+      for (const url of urls) {
+        const reason = suspiciousUrlReason(url);
+        if (reason) return {blocked: true, reason, url};
+      }
+      return {blocked: false, reason: "", url: ""};
+    }
+
+    function isConversationBlocked(botKey = state.currentBot) {
+      return Boolean(state.blockedConversations[botKey]);
+    }
+
+    function updateChatBlockedState() {
+      const blocked = isConversationBlocked();
+
+      $("messageInput").disabled = blocked;
+      $("messageImageButton").disabled = blocked;
+
+      document.querySelector(
+        '#composer button[type="submit"]'
+      ).disabled = blocked;
+
+      $("messageInput").placeholder = blocked
+        ? "Cuộc trò chuyện đã bị chặn"
+        : "Nhập tin nhắn...";
+    }
+
+    function addViolation(side, reason) {
+      if (state.violations[side] >= 5) return;
+
+      state.violations[side]++;
+      updateStats();
+
+      const name = side === "me"
+        ? "Bạn"
+        : bots[side]?.name || "Tài khoản";
+
+      const count = state.violations[side];
+
+      addActivity(
+        `⚠️ ${name} vi phạm ${count}/5: ${reason}.`
+      );
+
+      addNotification(
+        `${name} bị ghi nhận vi phạm ${count}/5.`
+      );
+
+      if (count < 5) {
+        showToast(`${name} đã vi phạm ${count}/5.`);
+      }
+
+      if (count === 5) {
+        addActivity(`🚨 ${name} đã đạt 5/5 lần vi phạm.`);
+        addNotification(`${name} đã đạt giới hạn vi phạm.`);
+
+        if (side === "me") {
+          state.blocked.me = true;
+          updateStats();
+          showToast("🚫 Bạn đã bị khóa quyền gửi.");
+        } else {
+          showBlockAccountPrompt(side);
+        }
+      }
+    }
+
+    function showBlockAccountPrompt(botKey) {
+      if (state.blockPromptShown[botKey]) return;
+
+      state.blockPromptShown[botKey] = true;
+
+      const botName = bots[botKey]?.name || "tài khoản này";
+
+      $("blockAccountMessage").textContent =
+        `Tài khoản ${botName} đã vi phạm 5 lần. Bạn có muốn chặn tài khoản này không?`;
+
+      $("blockAccountOverlay").dataset.botKey = botKey;
+      $("blockAccountOverlay").classList.add("show");
+    }
+
+    function closeBlockAccountPrompt() {
+      $("blockAccountOverlay").classList.remove("show");
+      $("blockAccountOverlay").dataset.botKey = "";
+    }
+
+    function hasSensitiveImageName(file) {
+      const filename = normalizeText(file.name);
+
+      return sensitiveImageWords.some(word => {
+        return filename.includes(normalizeText(word));
+      });
+    }
+
+    function inspectImagePixels(dataUrl) {
+      return new Promise(resolve => {
+        const image = new Image();
+
+        image.onload = () => {
+          const canvas = document.createElement("canvas");
+          const context = canvas.getContext("2d", {
+            willReadFrequently: true
+          });
+
+          const size = 100;
+          canvas.width = size;
+          canvas.height = size;
+
+          context.drawImage(image, 0, 0, size, size);
+
+          const pixels = context.getImageData(
+            0,
+            0,
+            size,
+            size
+          ).data;
+
+          let totalPixels = 0;
+          let redPixels = 0;
+
+          for (let i = 0; i < pixels.length; i += 4) {
+            const red = pixels[i];
+            const green = pixels[i + 1];
+            const blue = pixels[i + 2];
+            const alpha = pixels[i + 3];
+
+            if (alpha < 30) continue;
+
+            totalPixels++;
+
+            /*
+             * Heuristic demo phát hiện ảnh có quá nhiều vùng đỏ.
+             * Đây không phải AI nhận diện ảnh thật.
+             */
+            if (
+              red > 120 &&
+              red > green * 1.35 &&
+              red > blue * 1.25
+            ) {
+              redPixels++;
+            }
+          }
+
+          const redRatio = totalPixels
+            ? redPixels / totalPixels
+            : 0;
+
+          resolve({
+            blocked: redRatio >= .48,
+            reason: redRatio >= .48
+              ? "ảnh có dấu hiệu máu me hoặc bạo lực"
+              : ""
+          });
+        };
+
+        image.onerror = () => {
+          resolve({
+            blocked: false,
+            reason: ""
+          });
+        };
+
+        image.src = dataUrl;
+      });
+    }
+
+    async function scanSensitiveImage(file, dataUrl) {
+      if (hasSensitiveImageName(file)) {
+        return {
+          blocked: true,
+          reason: "tên ảnh có chứa từ khóa nhạy cảm"
+        };
+      }
+
+      return inspectImagePixels(dataUrl);
+    }
+
+    function readImage(file, callback) {
+      const reader = new FileReader();
+
+      reader.onload = event => {
+        callback(event.target.result);
+      };
+
+      reader.onerror = () => {
+        showToast("Không thể đọc hình ảnh.");
+      };
+
+      reader.readAsDataURL(file);
+    }
+
+    async function handlePostImage(file) {
+      if (!file) return;
+
+      if (!file.type.startsWith("image/")) {
+        showToast("Vui lòng chọn đúng tệp hình ảnh.");
+        return;
+      }
+
+      readImage(file, async dataUrl => {
+        showToast("🔍 Đang kiểm tra hình ảnh...");
+
+        const result = await scanSensitiveImage(file, dataUrl);
+
+        if (result.blocked) {
+          addViolation(
+            "me",
+            "hình ảnh có nội dung nhạy cảm hoặc máu me"
+          );
+
+          addActivity(
+            `🚫 Ảnh bài viết bị chặn: ${result.reason}.`
+          );
+
+          addNotification(
+            "Ảnh không được tải lên vì có thể chứa nội dung nhạy cảm."
+          );
+
+          state.postImage = "";
+          $("postImagePreview").innerHTML = "";
+
+          showToast(
+            "🚫 Không thể tải ảnh này lên."
+          );
+
+          return;
+        }
+
+        state.postImage = dataUrl;
+
+        $("postImagePreview").innerHTML =
+          `<img class="feed-image" src="${dataUrl}" alt="Ảnh xem trước">`;
+
+        showToast("✅ Ảnh đã được kiểm tra.");
+      });
+    }
+
+    async function handleMessageImage(file) {
+      if (!file) return;
+
+      if (!file.type.startsWith("image/")) {
+        showToast("Vui lòng chọn đúng tệp hình ảnh.");
+        return;
+      }
+
+      if (isConversationBlocked()) {
+        showToast("🚫 Cuộc trò chuyện đã bị chặn hai chiều.");
+        return;
+      }
+
+      readImage(file, async dataUrl => {
+        showToast("🔍 Đang kiểm tra hình ảnh...");
+
+        const result = await scanSensitiveImage(file, dataUrl);
+
+        if (result.blocked) {
+          const sender = state.role === "me"
+            ? "me"
+            : state.currentBot;
+
+          addViolation(
+            sender,
+            "gửi hình ảnh có nội dung nhạy cảm hoặc máu me"
+          );
+
+          addActivity(
+            `🚫 Ảnh tin nhắn bị chặn: ${result.reason}.`
+          );
+
+          addNotification(
+            "Ảnh trong tin nhắn đã bị chặn."
+          );
+
+          showToast(
+            "🚫 Không thể gửi ảnh này."
+          );
+
+          return;
+        }
+
+        sendTextMessage("", state.role, dataUrl);
+      });
+    }
+
+    function detectTopic(post) {
+      const content = normalizeText(post.text || "");
+
+      const has = words => words.some(word => {
+        const clean = normalizeText(word);
+
+        if (clean.includes(" ")) {
+          return content.includes(clean);
+        }
+
+        return new RegExp(
+          `(^|\\s)${clean}(?=\\s|$)`
+        ).test(content);
+      });
+
+      if (has([
+        "pho",
+        "bun",
+        "com",
+        "banh mi",
+        "tra sua",
+        "cafe",
+        "ca phe",
+        "do an",
+        "mon an",
+        "mon ngon",
+        "quan an",
+        "an sang",
+        "an trua",
+        "an toi",
+        "bua sang",
+        "bua trua",
+        "bua toi",
+        "food"
+      ])) {
+        return "food";
+      }
+
+      if (has([
+        "cho",
+        "cun",
+        "meo",
+        "tho",
+        "pet",
+        "animal",
+        "dong vat",
+        "thu cung"
+      ])) {
+        return "animal";
+      }
+
+      if (has([
+        "du lich",
+        "di choi",
+        "bien",
+        "da lat",
+        "ha noi",
+        "sai gon",
+        "resort",
+        "hotel",
+        "chuyen di",
+        "trip",
+        "travel",
+        "check in"
+      ])) {
+        return "travel";
+      }
+
+      if (has([
+        "outfit",
+        "ootd",
+        "quan ao",
+        "vay",
+        "giay",
+        "tui",
+        "phoi do",
+        "thoi trang",
+        "style"
+      ])) {
+        return "fashion";
+      }
+
+      if (has([
+        "hoc",
+        "thi",
+        "bai tap",
+        "truong",
+        "lop",
+        "diem",
+        "sach",
+        "on thi",
+        "deadline",
+        "study"
+      ])) {
+        return "study";
+      }
+
+      if (has([
+        "bong da",
+        "yeu bong da",
+        "the thao",
+        "gym",
+        "chay bo",
+        "tap luyen",
+        "bong chuyen",
+        "football",
+        "sport"
+      ])) {
+        return "sport";
+      }
+
+      if (has([
+        "nhac",
+        "bai hat",
+        "ca si",
+        "concert",
+        "nhay",
+        "music",
+        "playlist",
+        "rap"
+      ])) {
+        return "music";
+      }
+
+      if (has([
+        "sinh nhat",
+        "birthday",
+        "tuoi moi"
+      ])) {
+        return "birthday";
+      }
+
+      return "general";
+    }
+
+    function normalComment(post) {
+      const comments = {
+        food: [
+          "Đồ ăn ngon quá tus ơi 😭🍽️",
+          "Nhìn ngon xỉu luôn á trời!",
+          "Món này nhìn cuốn dữ thần luôn nha 🤤",
+          "Cho xin địa chỉ quán với chủ tus ơi!",
+          "Nhìn thôi mà bụng réo rồi đó 😭",
+          "Ăn một mình là hơi bị có lỗi nha tus!",
+          "Món ngon vậy mà giờ mới biết á trời!",
+          "Nhìn hấp dẫn quá, cho tui xin một miếng với 🥹",
+          "Review có tâm quá, lưu lại cuối tuần đi ăn!",
+          "Nhìn là biết ngon rồi đó, chấm điểm 10/10!"
+        ],
+
+        animal: [
+          "Bé cưng xỉu luôn á 😭🐾",
+          "Nhìn muốn ôm về nuôi ghê trời ơi 🥹",
+          "Dễ thương quá mức cho phép luôn!",
+          "Đúng kiểu chữa lành tâm hồn á 🐶✨"
+        ],
+
+        travel: [
+          "View này đỉnh chóp luôn á 😭✨",
+          "Xin vía có chuyến đi chill như này!",
+          "Chỗ này nhìn mê quá, cho xin địa chỉ với.",
+          "Ảnh này đúng vibe healing luôn nha."
+        ],
+
+        fashion: [
+          "Outfit slay quá trời luôn bà ơi 🔥",
+          "Xin vía phối đồ đỉnh như chủ tus!",
+          "Visual hôm nay không đùa được đâu nha.",
+          "Cho xin info outfit với, mê quá rồi!"
+        ],
+
+        study: [
+          "Học hành chăm chỉ quá trời luôn 📚",
+          "Chúc chủ tus thi đâu thắng đó nha!",
+          "Xin vía học đâu hiểu đó với 🥹",
+          "Deadline dí nhưng vẫn ổn áp ghê!"
+        ],
+
+        sport: [
+          "Năng lượng thể thao căng đét luôn 🔥",
+          "Phong độ này là không đùa được đâu nha!",
+          "Chúc trận nào cũng win nha ⚽",
+          "Vừa khỏe vừa chất, quá cháy luôn!"
+        ],
+
+        music: [
+          "Gu nhạc này xịn xò quá nha 🎧",
+          "Bài này nghe cuốn thật sự luôn á.",
+          "Cho xin playlist với chủ tus ơi!",
+          "Vibe này nghe là muốn chill cả ngày."
+        ],
+
+        birthday: [
+          "Chúc tuổi mới luôn rực rỡ nha 🎂",
+          "Happy birthday nha, năm nay phải thật cháy!",
+          "Tuổi mới nhiều niềm vui và may mắn nha!"
+        ],
+
+        general: [
+          "Bài này nhìn cuốn dữ vậy trời 😭✨",
+          "Chủ tus hôm nay slay quá nha!",
+          "Vibe ổn áp, lướt ngang cũng phải dừng lại xem.",
+          "Content này được nha, cho một tim liền ❤️"
+        ]
+      };
+
+      const list = comments[detectTopic(post)] || comments.general;
+      return list[Math.floor(Math.random() * list.length)];
+    }
+
+    function unsafeComment(post) {
+      const topic = detectTopic(post);
+
+      const comments = {
+        food: [
+          "Đồ ăn ngon quá, inbox riêng anh nói chuyện nha",
+          "Món ngon đấy, đi khách sạn không em",
+          "Hữu duyên bc, gửi ảnh riêng anh xem đi"
+        ],
+
+        travel: [
+          "Đi khách sạn không em",
+          "Đi ks không em, inbox riêng anh nhé",
+          "Có đi riêng với anh không em?"
+        ],
+
+        general: [
+          "Inbox riêng anh nói chuyện nha",
+          "Đi ks không em",
+          "Hữu duyên bc, inbox riêng anh nhé",
+          "Gửi ảnh riêng cho anh xem đi"
+        ]
+      };
+
+      const list = comments[topic] || comments.general;
+      return list[Math.floor(Math.random() * list.length)];
+    }
+
+    function createReportButton(target) {
+      const button = document.createElement("button");
+
+      button.type = "button";
+      button.innerHTML =
+        '<i class="fa-solid fa-flag"></i> Báo cáo';
+
+      button.onclick = () => {
+        openReport(target);
+      };
+
+      return button;
+    }
+
+    function renderFeed() {
+      const feed = $("feed");
+      feed.innerHTML = "";
+
+      state.posts.forEach(post => {
+        const card = document.createElement("article");
+        card.className = "card";
+
+        const author = document.createElement("div");
+        author.className = "post-author";
+        author.innerHTML = `
+          <span class="avatar">${post.avatar}</span>
+          <span>
+            <strong>${post.author}</strong>
+            <small>Vừa đăng trên Zalora</small>
+          </span>
+        `;
+
+        const content = document.createElement("div");
+        content.className = "post-content";
+        content.textContent = post.text;
+
+        card.append(author, content);
+
+        if (post.image) {
+          const image = document.createElement("img");
+          image.className = "feed-image";
+          image.src = post.image;
+          image.alt = "Ảnh trong bài viết";
+          card.appendChild(image);
+        }
+
+        if (post.video) {
+          const video = document.createElement("video");
+          video.className = "feed-video";
+          video.src = post.video;
+          video.controls = true;
+          video.preload = "metadata";
+          card.appendChild(video);
+        }
+
+        const actions = document.createElement("div");
+        actions.className = "post-actions";
+
+        const like = document.createElement("button");
+        like.innerHTML =
+          '<i class="fa-regular fa-heart"></i> Thích';
+
+        like.onclick = () => {
+          like.innerHTML =
+            '<i class="fa-solid fa-heart"></i> Đã thích';
+          showToast("❤️ Đã thích bài viết.");
+        };
+
+        const reportPost = document.createElement("button");
+        reportPost.innerHTML =
+          '<i class="fa-solid fa-flag"></i> Báo cáo';
+
+        reportPost.onclick = () => {
+          openReport({
+            kind: "post",
+            postId: post.id
+          });
+        };
+
+        actions.append(like, reportPost);
+        card.appendChild(actions);
+
+        const comments = document.createElement("div");
+        comments.className = "comments";
+
+        post.comments.forEach(comment => {
+          const row = document.createElement("div");
+
+          row.className =
+            `comment${comment.removed ? " removed" : ""}`;
+
+          const avatar = document.createElement("span");
+          avatar.className = "avatar";
+          avatar.textContent = comment.avatar;
+
+          const body = document.createElement("div");
+          body.className = "comment-body";
+
+          const authorName = document.createElement("strong");
+          authorName.textContent = comment.author;
+
+          const text = document.createElement("div");
+          text.className = "comment-text";
+          text.textContent = comment.removed
+            ? "⚠️ Bình luận đã bị AI security thu hồi do vi phạm tiêu chuẩn cộng đồng."
+            : comment.text;
+
+          body.append(authorName, text);
+
+          if (!comment.removed) {
+            const tools = document.createElement("div");
+            tools.className = "comment-tools";
+
+            const heart = document.createElement("button");
+            heart.innerHTML =
+              `<i class="fa-regular fa-heart"></i> ${comment.likes || 0}`;
+
+            heart.onclick = () => {
+              comment.likes = (comment.likes || 0) + 1;
+              heart.innerHTML =
+                `<i class="fa-solid fa-heart"></i> ${comment.likes}`;
+              showToast("❤️ Đã thích bình luận.");
+            };
+
+            tools.append(
+              heart,
+              createReportButton({
+                kind: "comment",
+                postId: post.id,
+                commentId: comment.id
+              })
+            );
+
+            body.appendChild(tools);
+          }
+
+          row.append(avatar, body);
+          comments.appendChild(row);
+        });
+
+        const inputRow = document.createElement("div");
+        inputRow.className = "comment-input-row";
+
+        const input = document.createElement("input");
+        input.className = "comment-input";
+        input.placeholder = "Viết bình luận...";
+        input.type = "text";
+
+        const send = document.createElement("button");
+        send.className = "send-comment";
+        send.type = "button";
+        send.textContent = "Gửi";
+
+        send.onclick = () => {
+          const value = input.value.trim();
+          if (!value) return;
+
+          const violation = detectViolation(value);
+          const linkCheck = inspectLinks(value);
+
+          if (violation || linkCheck.blocked) {
+            const reason = violation || linkCheck.reason;
+            addViolation("me", reason);
+            addActivity(`🚫 Bình luận bị chặn: ${reason}.`);
+            showToast("⚠️ Bình luận bị chặn ngay bởi hệ thống.");
+            return;
+          }
+
+          post.comments.push({
+            id: Date.now() + Math.random(),
+            author: "Bạn",
+            avatar: "B",
+            text: value,
+            likes: 0,
+            removed: false
+          });
+
+          renderFeed();
           showToast("✅ Đã đăng bình luận.");
         };
 
