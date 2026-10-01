@@ -2191,13 +2191,7 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
 
 
     function extractUrls(text) {
-      const value = String(text || "");
-
-      // Nhận cả link có giao thức và domain được viết trực tiếp
-      // (ví dụ: https://sex.com, www.sex.com, sex.com).
-      return value.match(
-        /(?:https?:\/\/|www\.)[^\s<>"']+|(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}(?:\/[^\s<>"']*)?/gi
-      ) || [];
+      return String(text || "").match(/(?:https?:\/\/|www\.)[^\s<>"']+/gi) || [];
     }
 
     function normalizeDomainForCheck(host) {
@@ -2220,11 +2214,6 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
 
       const host = url.hostname.toLowerCase();
       const urlText = normalizeText(`${host} ${url.pathname} ${url.search}`);
-
-      // Chặn "sex" ngay cả khi nó nằm giữa tên miền, đường dẫn hoặc tham số.
-      if (/sex/i.test(host) || /sex/i.test(url.pathname) || /sex/i.test(url.search)) {
-        return "đường link chứa từ khóa nội dung người lớn (sex)";
-      }
 
       // Chỉ kiểm tra URL/path/query, không kiểm tra caption.
       // Từ khóa đơn phải là token độc lập trong URL để tránh:
