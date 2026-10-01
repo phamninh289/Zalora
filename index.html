@@ -2191,7 +2191,13 @@ Mình đang nghe bạn. Bạn cứ kể nhé.`;
 
 
     function extractUrls(text) {
-      return String(text || "").match(/(?:https?:\/\/|www\.)[^\s<>"']+/gi) || [];
+      const value = String(text || "");
+
+      // Nhận cả link có giao thức và domain được viết trực tiếp
+      // (ví dụ: https://sex.com, www.sex.com, sex.com).
+      return value.match(
+        /(?:https?:\/\/|www\.)[^\s<>"']+|(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:com|net|org|info|biz|xyz|top|site|online|vip|vn)(?:\/[^\s<>"']*)?/gi
+      ) || [];
     }
 
     function normalizeDomainForCheck(host) {
